@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Дуэль Онлайн — PvP на разных устройствах</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', system-ui;
+            background: linear-gradient(135deg, #1a472a, #0e2a1a);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .game-box {
+            background: #2c1e12e6;
+            backdrop-filter: blur(8px);
+            border-radius: 60px;
+            padding: 25px;
+            max-width: 900px;
+            width: 100%;
+            box-shadow: 0 20px 35px black;
+            text-align: center;
+        }
+        .arena {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin: 20px 0;
+        }
+        .fighter {
+            background: #1f1b16;
+            flex: 1;
+            border-radius: 40px;
+            padding: 20px;
+            box-shadow: 0 10px 0 #3a2a1a;
+        }
+        .hp-bar {
+            background: #6b2e2e;
+            height: 24px;
+            border-radius: 30px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .hp-fill {
+            background: #e05a4f;
+            width: 100%;
+            height: 100%;
+            transition: width 0.3s;
+        }
+        button {
+            background: #f0b27a;
+            border: none;
+            padding: 12px 30px;
+            font-size: 1.3rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: 0.1s linear;
+            margin-top: 15px;
+        }
+        button:active {
+            transform: scale(0.97);
+        }
+        .log {
+            background: #000000aa;
+            border-radius: 28px;
+            padding: 12px;
+            min-height: 90px;
+            font-family: monospace;
+            color: #d4f1f9;
+            margin-top: 20px;
+        }
+        .turn-indicator {
+            background: #ffd966;
+            display: inline-block;
+            padding: 6px 20px;
+            border-radius: 50px;
+            font-weight: bold;
+        }
+        input {
+            padding: 12px;
+            font-size: 1rem;
+            border-radius: 60px;
+            border: none;
+            text-align: center;
+            margin: 10px;
+        }
+        .waiting {
+            background: #000000aa;
+            padding: 20px;
+            border-radius: 48px;
+            font-size: 1.3rem;
+        }
+    </style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+    const socket = io();
+    let myIndex = null;
+    let currentRoom = null;
+    let gameActive = false;
+    let myNick = '';
+    let players = [];
+    let currentHP = [100, 100];
+    let turn = 0;
+    
+    function renderLogin() {
+        document.getElementById('app').innerHTML = `
+            <div class="game-box" style="max-width: 400px;">
+                <h1 style="color:#ffd966;">⚔️ ОНЛАЙН ДУЭЛЬ ⚔️</h1>
+                <p style="color: white;">Введите ник и начните бой с реальным соперником</p>
+                <input type="text" id="nick" placeholder="Ваш ник" maxlength="16">
+                <br/>
+                <button id="joinBtn">🔍 Найти соперника</button>
+                <div id="waitStatus" style="margin-top: 20px; color: #ccc;"></div>
+            </div>
+        `;
+        document.getElementById('joinBtn').onclick = () => {
+            myNick = document.getElementById('nick').value.trim();
+            if (!myNick) myNick = "Воин";
+            socket.emit('find-game', myNick);
+            document.getElementById('waitStatus').innerHTML = '⏳ Поиск противника...';
+            document.getElementById('joinBtn').disabled = true;
+        };
+    }
+    
+    function renderGame() {
+        if (!players[0] || !players[1]) return;
+        const isMyTurn = (gameActive && turn === myIndex);
+        document.getElementById('app').innerHTML = `
+            <div class="game-box">
+                <h2>⚔️ ${players[0]}  VS  ${players[1]} ⚔️</h2>
+                <div class="arena">
+                    <div class="fighter">
+                        <h3>🛡️ ${players[0]}</h3>
+                        <div class="hp-bar"><div class="hp-fill" style="width: ${(currentHP[0]/100)*100}%"></div></div>
+                        <div>❤️ ${currentHP[0]} HP</div>
+                    </div>
+                    <div class="fighter">
+                        <h3>🗡️ ${players[1]}</h3>
+                        <div class="hp-bar"><div class="hp-fill" style="width: ${(currentHP[1]/100)*100}%"></div></div>
+                        <div>❤️ ${currentHP[1]} HP</div>
+                    </div>
+                </div>
+                <div class="turn-indicator" style="background: ${isMyTurn ? '#4cae4c' : '#888'}">
+                    ${isMyTurn ? '🔥 ВАША ОЧЕРЕДЬ атаковать 🔥' : `Ход: ${players[turn]}`}
+                </div>
+                <button id="attackBtn" ${!isMyTurn || !gameActive ? 'disabled' : ''}>💥 НАНЕСТИ УДАР 💥</button>
+                <div class="log" id="logArea">Ожидание хода...</div>
+                <p style="color:white; font-size:12px;">Игра онлайн — ваш соперник на другом устройстве</p>
+            </div>
+        `;
+        const btn = document.getElementById('attackBtn');
+        if (btn) {
+            btn.onclick = () => {
+                if (gameActive && turn === myIndex && currentHP[0] > 0 && currentHP[1] > 0) {
+                    socket.emit('attack', { roomId: currentRoom, attackerIndex: myIndex });
+                } else {
+                    alert("Сейчас не ваш ход или игра окончена");
+                }
+            };
+        }
+    }
+    
+    function addLog(msg) {
+        const logDiv = document.getElementById('logArea');
+        if (logDiv) logDiv.innerHTML = msg + '<br>' + logDiv.innerHTML.slice(0, 300);
+    }
+    
+    socket.on('waiting', (msg) => {
+        document.getElementById('waitStatus').innerHTML = msg;
+    });
+    
+    socket.on('game-start', (data) => {
+        players = data.players;
+        currentRoom = data.roomId;
+        currentHP = [100,100];
+        turn = 0;
+        gameActive = true;
+        renderGame();
+        addLog("Игра началась! Первый ход у " + players[0]);
+    });
+    
+    socket.on('your-index', (idx) => {
+        myIndex = idx;
+    });
+    
+    socket.on('update-battle', (data) => {
+        currentHP = data.hp;
+        turn = data.turn;
+        addLog(data.lastAttack);
+        addLog(`Сейчас ход: ${data.currentPlayer}`);
+        if (gameActive) renderGame();
+    });
+    
+    socket.on('game-over', (data) => {
+        gameActive = false;
+        addLog(`🏆 ПОБЕДА! ${data.winner} одержал победу! 🏆`);
+        document.getElementById('attackBtn').disabled = true;
+        setTimeout(() => {
+            if(confirm('Игра окончена. Хотите найти нового соперника?')) location.reload();
+        }, 500);
+    });
+    
+    socket.on('opponent-left', () => {
+        gameActive = false;
+        addLog("❌ Соперник покинул игру ❌");
+        document.getElementById('attackBtn').disabled = true;
+        setTimeout(() => location.reload(), 2000);
+    });
+    
+    socket.on('not-your-turn', () => {
+        addLog("⏳ Не ваш ход! Подождите.");
+    });
+    
+    renderLogin();
+</script>
+</body>
+</html>
